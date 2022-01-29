@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
 	"embed"
 	"fmt"
 	"image"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	svg "github.com/ajstarks/svgo"
+	lru "github.com/hashicorp/golang-lru"
 )
 
 func init() {
@@ -91,10 +93,11 @@ func (b Board) Svg(scale int) ([]byte, error) {
 	canvas.Start(k*len(b), k*len(b[0]))
 	for i := 0; i < len(b); i++ {
 		for j := 0; j < len(b[i]); j++ {
+			canvas.Rect(i*k, j*k, k, k, `fill="#fff"`)
 			if !b[i][j] {
 				continue
 			}
-			canvas.Rect(i*k, j*k, k, k, `fill="black"`)
+			canvas.Rect(i*k, j*k, k, k, `fill="#d0d0d0"`)
 		}
 	}
 	canvas.End()
@@ -180,32 +183,42 @@ func NewGameRender() Render {
 
 func (r *GameRender) Start() {
 	go func() {
-		b := NewBoard(80, 60)
-
 		for {
-			if len(r.gameChs) == 0 {
-				time.Sleep(time.Millisecond * 100)
-				continue
-			}
-			b = Evolute(b)
+			b := NewBoard(20, 20)
 
-			img, err := b.Svg(10)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-			bundle := ImageBundle{
-				Data:        img,
-				ContentType: "image/svg+xml",
-			}
+			cache, _ := lru.New(10)
 
-			for ch := range r.gameChs {
-				select {
-				case ch <- bundle:
-				default:
+			for {
+				if len(r.gameChs) == 0 {
+					time.Sleep(time.Millisecond * 100)
+					continue
 				}
+				b = Evolute(b)
+
+				hash := md5.Sum([]byte(fmt.Sprintf("%v", b)))
+				if cache.Contains(hash) {
+					break
+				}
+				cache.Add(hash, "")
+
+				img, err := b.Svg(20)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				bundle := ImageBundle{
+					Data:        img,
+					ContentType: "image/svg+xml",
+				}
+
+				for ch := range r.gameChs {
+					select {
+					case ch <- bundle:
+					default:
+					}
+				}
+				time.Sleep(time.Second)
 			}
-			time.Sleep(time.Second)
 		}
 	}()
 }
